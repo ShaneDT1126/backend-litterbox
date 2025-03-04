@@ -1,0 +1,27 @@
+version: '3'
+
+services:
+  litterbox-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./content:/app/content
+      - ./faiss_index:/app/faiss_index
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MONGO_URI=mongodb://mongodb:27017/litterbox
+    depends_on:
+      - mongodb
+    restart: always
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: always
+
+volumes:
+  mongodb_data:
