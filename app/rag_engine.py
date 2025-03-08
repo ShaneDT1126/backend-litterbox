@@ -1,5 +1,5 @@
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores.faiss import FAISS
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema import Document
@@ -8,6 +8,7 @@ import os
 import json
 import time
 from dotenv import load_dotenv
+from .conversation_memory import ConversationMemory
 
 load_dotenv()
 
@@ -19,12 +20,19 @@ class RAGEngine:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
 
+        # Initialize conversation memory
+        self.conversation_memory = ConversationMemory()
+
         # Initialize embeddings
         self.embeddings = OpenAIEmbeddings()
 
         # Load vector store if it exists, otherwise create empty one
         try:
-            self.vector_store = FAISS.load_local(vector_store_path, self.embeddings)
+            self.vector_store = FAISS.load_local(
+                vector_store_path,
+                self.embeddings,
+                allow_dangerous_deserialization=True  # Add this parameter
+            )
             print(f"Loaded vector store from {vector_store_path}")
         except Exception as e:
             print(f"Could not load vector store: {e}")
@@ -174,14 +182,21 @@ class RAGEngine:
 
     def process_query(self,
                       query: str,
-                      conversation_id: str,
-                      conversation_history: List[Dict],
-                      current_scaffolding_level: int = 1,
-                      metadata: Dict = None) -> Tuple[str, List[Dict], int, str]:
+                      conversation_id: str = "new",
+                      student_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Process a query using RAG multiquery approach
-        Returns: (response, sources, scaffolding_level, detected_topic)
+        Process a query using RAG multiquery approach and maintain conversation context
+        Returns: A response dictionary with all relevant information
         """
+        # Get conversation history or create a new conversation
+        conversation_id, history = self.conversation_memory.get_conversation(conversation_id, student_id)
+
+        # Determine current scaffolding level from conversation history
+        if history:
+            current_scaffolding_level = self.conversation_memory.get_current_scaffolding_level(conversation_id)
+        else:
+            current_scaffolding_level = 1  # Default for new conversations
+
         # Retrieve relevant documents using multiquery
         retrieved_docs = self.retriever.get_relevant_documents(query)
 
@@ -189,13 +204,13 @@ class RAGEngine:
         detected_topic = self.detect_topic(query, retrieved_docs)
 
         # Determine scaffolding level
-        scaffolding_level = self.determine_scaffolding_level(conversation_history, current_scaffolding_level)
+        scaffolding_level = self.determine_scaffolding_level(history, current_scaffolding_level)
 
         # Format conversation history for context
         formatted_history = ""
-        if conversation_history:
+        if history:
             # Only include last 3 exchanges for context
-            recent_history = conversation_history[-3:]
+            recent_history = history[-3:]
             formatted_history = "\n".join([
                 f"Student: {exchange.get('student_message', '')}\nAssistant: {exchange.get('assistant_message', '')}"
                 for exchange in recent_history
@@ -233,6 +248,7 @@ class RAGEngine:
 
         # Generate response
         response = self.llm(prompt.format_messages())
+        response_text = response.content
 
         # Format sources for citation
         sources = [
@@ -245,4 +261,23 @@ class RAGEngine:
             for doc in retrieved_docs[:3]
         ]
 
-        return response.content, sources, scaffolding_level, detected_topic
+        # Store the exchange in conversation memory
+        self.conversation_memory.add_exchange(
+            conversation_id=conversation_id,
+            student_message=query,
+            assistant_message=response_text,
+            topic=detected_topic,
+            scaffolding_level=scaffolding_level,
+            student_id=student_id
+        )
+
+        # Prepare response object
+        response_obj = {
+            "response": response_text,
+            "sources": sources,
+            "scaffolding_level": scaffolding_level,
+            "topic": detected_topic,
+            "conversation_id": conversation_id
+        }
+
+        return response_obj

@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any
 
 class QueryRequest(BaseModel):
     query: str
-    conversation_id: str
+    conversation_id: str = "new"
     student_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
