@@ -2,12 +2,16 @@ import os
 import glob
 from typing import List, Dict, Tuple
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, OpenAI
-from langchain.vectorstores import FAISS
-from langchain.schema import Document
+from langchain_community.vectorstores.faiss import FAISS
+from langchain_core.documents import Document
 from dotenv import load_dotenv
-import re
+from typing import List
+import traceback
+from pypdf import PdfReader
+
+
 
 # Load environment variables
 load_dotenv()
@@ -76,7 +80,14 @@ def extract_subtopic_from_content(text: str, topic: str) -> str:
 def process_pdf_file(file_path: str) -> List[Document]:
     """Process a single PDF file and return Documents with metadata"""
     try:
-        # Load the PDF
+        # First, try a simple check to see if the PDF is valid
+        try:
+            PdfReader(file_path)
+        except Exception as e:
+            print(f"Invalid PDF format in {file_path}: {e}")
+            return []
+
+        # If it passes the basic check, process it fully
         loader = PyPDFLoader(file_path)
         documents = loader.load()
 
@@ -90,8 +101,43 @@ def process_pdf_file(file_path: str) -> List[Document]:
 
         return documents
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        print(f"Error processing {file_path}: {str(e)}")
+        # For debugging, you might want to see the full traceback
+        print(traceback.format_exc())
         return []
+
+
+def load_pdf_documents(content_dir: str) -> List[Document]:
+    """Load all PDF documents from the content directory"""
+    documents = []
+    total_pages = 0
+
+    # Get all PDF files in the content directory
+    pdf_files = [os.path.join(content_dir, f) for f in os.listdir(content_dir)
+                 if f.lower().endswith('.pdf')]
+
+    # Process each PDF file
+    for pdf_file in pdf_files:
+        try:
+            # Use a simple check first to see if the PDF is valid
+            from pypdf import PdfReader
+            try:
+                # Just try to open it to see if it's valid
+                PdfReader(pdf_file)
+            except Exception as e:
+                print(f"Skipping invalid PDF {pdf_file}: {e}")
+                continue
+
+            # If it passes the basic check, process it fully
+            docs = process_pdf_file(pdf_file)
+            documents.extend(docs)
+            total_pages += len(docs)
+        except Exception as e:
+            print(f"Failed to process {pdf_file}: {e}")
+            continue
+
+    print(f"Loaded {total_pages} document pages")
+    return documents
 
 
 def process_content_directory(content_dir: str = "content") -> List[Document]:
@@ -100,8 +146,20 @@ def process_content_directory(content_dir: str = "content") -> List[Document]:
 
     # Get all PDF files (not using recursive since we're assuming a flat structure)
     for file_path in glob.glob(f"{content_dir}/*.pdf"):
-        documents = process_pdf_file(file_path)
-        all_documents.extend(documents)
+        try:
+            # First, try a simple check to see if the PDF is valid
+            try:
+                PdfReader(file_path)
+            except Exception as e:
+                print(f"Skipping invalid PDF {file_path}: {e}")
+                continue
+
+            # If it passes the basic check, process it fully
+            documents = process_pdf_file(file_path)
+            all_documents.extend(documents)
+        except Exception as e:
+            print(f"Failed to process {file_path}: {e}")
+            continue
 
     return all_documents
 
